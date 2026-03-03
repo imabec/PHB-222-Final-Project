@@ -1,0 +1,213 @@
+---
+title: "Final 222 Project"
+output:
+  pdf_document: default
+  html_document: default
+date: "2026-03-02"
+---
+
+Libraries
+
+```{r}
+library(nhanesA)
+library(purrr)
+library(dplyr)
+library(ggplot2)
+```
+
+Retrieving Nhanes Data
+
+```{r}
+dfs = list(
+  demographics = nhanes("DEMO_I"),
+  chloestral   = nhanes("BPQ_I"),
+  cardio       = nhanes("CDQ_I"),
+  diabetes     = nhanes("DIQ_I"),
+  diet         = nhanes("DBQ_I"),
+  disability   = nhanes("DLQ_I"),
+  drugs        = nhanes("DUQ_I"),
+  food_sec     = nhanes("FSQ_I"),
+  housing      = nhanes("HOQ_I"),
+  income       = nhanes("INQ_I"),
+  conditions   = nhanes("MCQ_I"),
+  activity     = nhanes("PAQ_I"),
+  kidney       = nhanes("KIQ_U_I"),
+  occuptation  = nhanes("OCQ_I"),
+  mental       = nhanes("DPQ_I")
+)
+
+df = reduce(dfs, left_join, by = "SEQN")
+```
+
+Creating Dataframe
+
+```{r}
+## creating new cardiovascular health outcome
+df <- df %>%
+  mutate(
+    cardio = if_else(
+      MCQ160B == "Yes" |
+      MCQ160C == "Yes" |
+      MCQ160D == "Yes" |
+      MCQ160E == "Yes",
+      1, 0
+    )
+  )
+
+## only selecting columns with variables we are going to put into the model
+df <- df %>%
+  select(RIDRETH3, RIDAGEYR, RIAGENDR, INDFMPIR, DMDHREDU, cardio)
+
+## getting rid of any rows with NA values
+df <- na.omit(df)
+
+## selecting rows only if they are at least 20 years old (since cardiovascular variables were only for people above 20)
+df <- df %>%
+  filter(RIDAGEYR >= 20)
+
+## rename columns to make more sense 
+df <- df %>%
+  rename(
+    race = RIDRETH3,
+    age = RIDAGEYR,
+    gender = RIAGENDR,
+    income = INDFMPIR,
+    education = DMDHREDU
+  )
+
+## combining mexican american and other hispanic into just one category: hispanic
+df <- df %>%
+  mutate(
+    race = case_when(
+      race %in% c("Mexican American", "Other Hispanic") ~ "Hispanic",
+      TRUE ~ race
+    )
+  )
+
+## getting rid of rows with education as don't know
+df <- df %>%
+  filter(education != "Don't Know")
+
+## combining 9-11th grade and less than 9th grade 
+df <- df %>%
+  mutate(
+    education = case_when(
+      education %in% c(
+        "Less Than 9th Grade",
+        "9-11th Grade (Includes 12th grade with no diploma)"
+      ) ~ "Not High School Graduate",
+      TRUE ~ education
+    )
+  )
+
+## combining Some College or AA degree and High School Grad/GED or Equivalent
+df <- df %>%
+  mutate(
+    education = case_when(
+      education %in% c("High School Grad/GED or Equivalent",
+                       "Some College or AA degree") ~ "High School Graduate",
+      TRUE ~ education
+    )
+  )
+
+```
+
+Analysis
+
+```{r}
+## checking variable type 
+df$cardio    <- as.factor(df$cardio)
+df$education <- as.factor(df$education)
+df$gender    <- as.factor(df$gender)
+df$race      <- as.factor(df$race)
+
+## changing reference variables 
+df$education <- relevel(as.factor(df$education),
+                        ref = "Not High School Graduate")
+
+df$race <- relevel(as.factor(df$race),
+                   ref = "Non-Hispanic White")
+```
+
+```{r}
+## exploratory data analysis 
+
+df %>%
+  group_by(education) %>%
+  summarise(prop_cardio = mean(cardio == 1)) %>%
+  ggplot(aes(x = education, y = prop_cardio)) +
+  geom_col() +
+  labs(
+    x = "Education Level",
+    y = "Proportion with Cardiovascular Disease",
+    title = "Cardiovascular Disease by Education Level"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+## fitted the model with just the confounders, all have p-values less than 0.2 besides  raceNon-Hispanic Black (p = 0.50062) and raceOther Race - Including Multi-Racial (p = 0.32112), so I'm going to keep all confounder 
+
+model_confounders <- glm(
+  cardio ~ age + gender + race + income,
+  data = df,
+  family = binomial
+)
+summary(model_confounders)
+```
+
+```{r}
+model_base <- glm(
+  cardio ~ education + age + gender + race + income,
+  data = df,
+  family = binomial
+)
+summary(model_base)
+```
+
+```{r}
+## cardiovascular outcomes based on education really don't change by race 
+model_int_race <- glm(
+  cardio ~ education * race + age + gender + income,
+  data = df,
+  family = binomial
+)
+
+summary(model_int_race)
+```
+
+```{r}
+## cardiovascular outcomes based on education do change by gender
+model_int_gender <- glm(
+  cardio ~ education * gender + age + race + income,
+  data = df,
+  family = binomial
+)
+
+summary(model_int_gender)
+```
+
+```{r}
+anova(model_base, model_int_gender, test = "LRT")
+
+```
+
+*investigating whether the effect of education differs by gender adjusted for age, race, income*
+
+*education reference = not high school graduate, gender reference = male*
+
+**Among males, there is no statistically significant association between education level and cardiovascular disease**
+
+-   educationCollege Graduate or above 0.0878 p = 0.7017
+
+-   educationHigh School Graduate 0.1549 p = 0.3881
+
+**The education effect for females differs from males by -0.9027 (p = 0.0117 ) (on the log-odds scale)**
+
+-   educationCollege Graduate or above:genderFemale (Estimate = -0.9027, p = 0.0117)
+
+-   female college effect = exp(0.087806 + (-0.9027)) = exp(-0.814894) = 0.4426862
+
+**Among females, college graduates have approximately 56% lower odds of cardiovascular disease compared to women without a high school degree.**
+
+**There is statistical evidence that the association between education and cardiovascular health differs by gender.**
