@@ -1,0 +1,190 @@
+---
+title: "Final 222 Project"
+output:
+  pdf_document: default
+  html_document: default
+date: "2026-03-02"
+---
+
+Libraries
+
+```{r}
+library(nhanesA)
+library(purrr)
+library(dplyr)
+library(ggplot2)
+library(survey)
+library(svydiags)
+```
+
+Retrieving Nhanes Data
+
+```{r}
+dfs = list(
+  demographics = nhanes("DEMO_I"),
+  chloestral   = nhanes("BPQ_I"),
+  cardio       = nhanes("CDQ_I"),
+  diabetes     = nhanes("DIQ_I"),
+  diet         = nhanes("DBQ_I"),
+  disability   = nhanes("DLQ_I"),
+  drugs        = nhanes("DUQ_I"),
+  food_sec     = nhanes("FSQ_I"),
+  housing      = nhanes("HOQ_I"),
+  income       = nhanes("INQ_I"),
+  conditions   = nhanes("MCQ_I"),
+  activity     = nhanes("PAQ_I"),
+  kidney       = nhanes("KIQ_U_I"),
+  occuptation  = nhanes("OCQ_I"),
+  mental       = nhanes("DPQ_I")
+)
+
+df = reduce(dfs, left_join, by = "SEQN")
+```
+
+Creating Dataframe
+
+```{r}
+## creating new cardiovascular health outcome
+df <- df %>%
+  mutate(
+    cardio = if_else(
+      MCQ160B == "Yes" |
+      MCQ160C == "Yes" |
+      MCQ160D == "Yes" |
+      MCQ160E == "Yes",
+      1, 0
+    )
+  )
+
+## only selecting columns with variables we are going to put into the model
+df <- df %>%
+dplyr::select(RIDRETH3, RIDAGEYR, RIAGENDR, INDFMPIR, DMDHREDU, cardio, SDMVPSU, SDMVSTRA, WTINT2YR)
+## 9,971 entries 
+
+## getting rid of any rows with NA values
+df <- na.omit(df)
+## 4,939 entries (this eliminates anyone under 20 since cardiovasuclar variables were only for people above 20)
+
+## rename columns to make more sense 
+df <- df %>%
+  rename(
+    race = RIDRETH3,
+    age = RIDAGEYR,
+    gender = RIAGENDR,
+    income = INDFMPIR,
+    education = DMDHREDU
+  )
+
+## combining mexican american and other hispanic into just one category: hispanic
+df <- df %>%
+  mutate(
+    race = case_when(
+      race %in% c("Mexican American", "Other Hispanic") ~ "Hispanic",
+      TRUE ~ race
+    )
+  )
+
+## getting rid of rows with education as don't know
+df <- df %>%
+  filter(education != "Don't Know")
+
+## combining 9-11th grade and less than 9th grade 
+df <- df %>%
+  mutate(
+    education = case_when(
+      education %in% c(
+        "Less Than 9th Grade",
+        "9-11th Grade (Includes 12th grade with no diploma)"
+      ) ~ "Not High School Graduate",
+      TRUE ~ education
+    )
+  )
+
+## combining Some College or AA degree and High School Grad/GED or Equivalent
+df <- df %>%
+  mutate(
+    education = case_when(
+      education %in% c("High School Grad/GED or Equivalent",
+                       "Some College or AA degree") ~ "High School Graduate",
+      TRUE ~ education
+    )
+  )
+
+```
+
+Analysis
+
+```{r}
+## checking variable type 
+df$cardio    <- as.factor(df$cardio)
+df$education <- as.factor(df$education)
+df$gender    <- as.factor(df$gender)
+df$race      <- as.factor(df$race)
+
+## changing reference variables 
+df$education <- relevel(as.factor(df$education),
+                        ref = "Not High School Graduate")
+
+df$race <- relevel(as.factor(df$race),
+                   ref = "Non-Hispanic White")
+```
+
+
+```{r}
+## exploratory data analysis 
+
+df %>%
+  group_by(education) %>%
+  summarise(prop_cardio = mean(cardio == 1)) %>%
+  ggplot(aes(x = education, y = prop_cardio)) +
+  geom_col() +
+  labs(
+    x = "Education Level",
+    y = "Proportion with Cardiovascular Disease",
+    title = "Cardiovascular Disease by Education Level"
+  ) +
+  theme_minimal()
+```
+
+
+
+```{r}
+## survey weights
+
+nhc = svydesign(
+id =~SDMVPSU,
+strata = ~SDMVSTRA,
+weights = ~WTINT2YR,
+data = df,
+nest = TRUE
+)
+```
+
+
+```{r}
+# Research Question: Is education associated with cardiovascular health outcomes? Does education have stronger health effects for women than men? 
+
+## no interaction term 
+model_svy <- svyglm(cardio ~ education + gender + I(age^2) + race + income,
+design = nhc,
+family = quasibinomial()
+)
+summary(model_svy)
+## this is saying women in general while holding our other confounders constant have less cardiovasucular problems 
+## holding gender, age, race, and income constant, education is not a statistically significant predictor for cardiovascular health outcomes
+## but, holding education, age, race, and income constant, gender is a statistically significant predictor for cardiovasuclar health otucomes 
+```
+```{r}
+# interaction term
+model_int_svy <- svyglm(cardio ~ education * gender + I(age^2) + race + income,
+design = nhc,
+family = quasibinomial()
+)
+summary(model_int_svy)
+```
+
+
+```{r}
+anova(model_svy, model_int_svy)
+```
+
