@@ -174,6 +174,110 @@ summary(model_svy)
 ## holding gender, age, race, and income constant, education is not a statistically significant predictor for cardiovascular health outcomes
 ## but, holding education, age, race, and income constant, gender is a statistically significant predictor for cardiovasuclar health otucomes 
 ```
+Table
+```{r}
+# Model 1 table
+coef <- summary(model_svy)$coefficients
+ci   <- confint(model_svy)
+
+table1 <- cbind(
+  est = coef[, 1],
+  OR = exp(coef[, 1]),
+  CI = ci,
+  p_value = coef[, ncol(coef)]
+)
+
+round(table1, 3)
+```
+
+Got all of my Diagnostic Ideas from here:
+https://cran.r-project.org/web/packages/svydiags/svydiags.pdf
+```{r}
+cd = svyCooksD(model_svy,"SDMVSTRA","SDMVPSU",doplot = F)
+```
+
+```{r}
+#computes the leverages from a model fitted with complex survey data
+h = svyhat(model_svy)
+```
+
+```{r}
+#computes the standardized residuals, i.e., the residuals divided by an estimate of the
+#model standard deviation of the residuals.
+res = svystdres(model_svy, "SDMVSTRA","SDMVPSU", doplot = T)
+```
+
+```{r}
+#computes variance inflation factors
+X = model.matrix(~education + gender + I(age^2) + race + income,
+                 data = model.frame(model_svy))
+rows_used = as.numeric(names(model_svy$y))
+w = weights(nhc)[rows_used]
+
+svyvif(model_svy, X[,-1], w,"SDMVSTRA","SDMVPSU")
+```
+
+```{r}
+#the amount that a parameter estimate changes when the unit is deleted from the sample
+#$cutoff(2/sqrt(n)): 0.377269
+dfb = svydfbetas(model_svy,"SDMVSTRA","SDMVPSU",3)
+apply(abs(dfb$Dfbetas)>dfb$cutoff,1,sum)
+```
+
+```{r}
+#the amount that a unit’s predicted value changes when the unit is deleted from the sample.
+#$cutoff: 0.121539
+dff=svydffits(model_svy,"SDMVSTRA","SDMVPSU",4)
+sum(abs(dff$Dffits) > dff$cutoff)
+```
+
+```{r}
+# Cook's distance vs fitted values
+plot(fitted(model_svy), cd,
+     xlab = "Fitted Values",
+     ylab = "Cook's Distance",
+     main = "Cook's Distance vs Fitted Values")
+abline(h = c(2,3), lty = 2,lwd = 3,col ="red")
+```
+```{r}
+# Cook's distance vs leverage
+plot(h, cd,
+     xlab = "Leverage",
+     ylab = "Cook's Distance",
+     main = "Cook's Distance vs Leverage")
+abline(v = 3 * mean(h), lty = 2, lwd=3, col = "red")
+abline(h = c(2, 3), lty = 2, lwd = 3, col = "green")
+```
+```{r}
+#Leverage vs Fitted Values
+plot(fitted(model_svy),h,
+     xlab = "Fitted Values",
+     ylab = "Leverage",
+     main = "Leverage vs Fitted Values")
+abline(h = 3 * mean(h, na.rm = TRUE), lty = 2, lwd = 3, col = "red")
+```
+
+```{r}
+# Standardized residuals vs fitted values
+plot(fitted(model_svy), res$stdresids,
+     xlab = "Fitted values",
+     ylab = "Standardized Residuals",
+     main = "Standardized Residuals vs Fitted Values")
+abline(h = c(-3, 3), lty = 2, lwd = 3, col = "red")
+```
+
+```{r}
+# Standardized residuals vs leverage
+plot(h, res$stdresids,
+     xlab = "Leverage",
+     ylab = "Standardized Residuals",
+     main = "Standardized Residuals vs Leverage")
+abline(v = 3 * mean(h), lty = 2,lwd=3, col = "green")
+abline(h = c(-3, 3), lty = 2,lwd=3, col = "red")
+```
+
+
+
 ```{r}
 # interaction term
 model_int_svy <- svyglm(cardio ~ education * gender + I(age^2) + race + income,
@@ -187,4 +291,99 @@ summary(model_int_svy)
 ```{r}
 anova(model_svy, model_int_svy)
 ```
+Table
+```{r}
+# Interaction table
+coef <- summary(model_int_svy)$coefficients
+ci   <- confint(model_int_svy)
 
+table2 <- cbind(
+  est = coef[, 1],
+  OR = exp(coef[, 1]),
+  CI = ci,
+  p_value = coef[, ncol(coef)]
+)
+
+round(table2, 3)
+```
+
+```{r}
+cd = svyCooksD(model_int_svy,"SDMVSTRA","SDMVPSU")
+```
+
+```{r}
+h = svyhat(model_int_svy)
+```
+
+```{r}
+res = svystdres(model_int_svy, "SDMVSTRA","SDMVPSU", doplot = F)
+```
+
+```{r}
+X = model.matrix(~education + gender + I(age^2) + race + income,
+                 data = model.frame(model_int_svy))
+rows_used = as.numeric(names(model_int_svy$y))
+w = weights(nhc)[rows_used]
+
+svyvif(model_int_svy, X[,-1], w,"SDMVSTRA","SDMVPSU")
+```
+
+```{r}
+#$cutoff(2/sqrt(n)): 0.3808568
+dfb = svydfbetas(model_int_svy,"SDMVSTRA","SDMVPSU",3)
+apply(abs(dfb$Dfbetas)>dfb$cutoff,1,sum)
+```
+
+```{r}
+#$cutoff: 0.1371678
+dff=svydffits(model_int_svy,"SDMVSTRA","SDMVPSU",4)
+dff$cutoff
+sum(abs(dff$Dffits) > dff$cutoff)
+```
+
+```{r}
+# Cook's distance vs fitted values
+plot(fitted(model_int_svy), cd,
+     xlab = "Fitted Values",
+     ylab = "Cook's Distance",
+     main = "Cook's Distance vs Fitted Values")
+abline(h = c(2,3), lty = 2, lwd =3, col = "red")
+```
+
+```{r}
+# Cook's distance vs leverage
+plot(h, cd,
+     xlab = "Leverage",
+     ylab = "Cook's Distance",
+     main = "Cook's Distance vs Leverage")
+abline(v = 3 * mean(h), lty = 2,col = "green")
+abline(h = c(2, 3), lty = 2,lwd = 3, col ="red")
+```
+
+```{r}
+#Leverage vs Fitted Values
+plot(fitted(model_int_svy),h,
+     xlab = "Fitted Values",
+     ylab = "Leverage",
+     main = "Leverage vs Fitted Values")
+abline(h = 3 * mean(h, na.rm = TRUE), lty = 2, lwd = 3, col = "red")
+```
+
+```{r}
+# Standardized residuals vs fitted values
+plot(fitted(model_int_svy), res$stdresids,
+     xlab = "Fitted values",
+     ylab = "Standardized Residuals",
+     main = "Standardized Residuals vs Fitted Values")
+abline(h = c(-3, 3), lty = 2,lwd=3, col = "red")
+```
+
+```{r}
+# Standardized residuals vs leverage
+plot(h, res$stdresids,
+     xlab = "Leverage",
+     ylab = "Standardized Residuals",
+     main = "Standardized Residuals vs Leverage")
+abline(v = 3 * mean(h), lty = 2,lwd=3, col = "green")
+abline(h = c(-3, 3), lty = 2,lwd=3, col = "red")
+```
