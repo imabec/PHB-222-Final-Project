@@ -1,0 +1,365 @@
+---
+title: "standardized"
+output: pdf_document
+date: "2026-03-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(nhanesA)
+library(dplyr)
+library(purrr)
+library(haven)
+library(survey)
+library(ggplot2)
+dfs <- list(
+
+demographics = list(
+G = nhanes("DEMO_G"),
+H = nhanes("DEMO_H"),
+I = nhanes("DEMO_I"),
+J = nhanes("DEMO_J")
+),
+
+
+conditions = list(
+G = nhanes("MCQ_G"),
+H = nhanes("MCQ_H"),
+I = nhanes("MCQ_I"),
+J = nhanes("MCQ_J")
+),
+
+mental = list(
+G = nhanes("DPQ_G"),
+H = nhanes("DPQ_H"),
+I = nhanes("DPQ_I"),
+J = nhanes("DPQ_J")
+),
+
+income = list(
+G = nhanes("INQ_G"),
+H = nhanes("INQ_H"),
+I = nhanes("INQ_I"),
+J = nhanes("INQ_J")
+),
+
+
+activity = list(
+G = nhanes("PAQ_G"),
+H = nhanes("PAQ_H"),
+I = nhanes("PAQ_I"),
+J = nhanes("PAQ_J")
+)
+)
+```
+
+
+```{r}
+library(dplyr)
+library(purrr)
+
+cycle_labels <- c(
+  G = "2011-2012",
+  H = "2013-2014",
+  I = "2015-2016",
+  J = "2017-2018"
+)
+
+join_one_cycle <- function(cycle) {
+  dfs$demographics[[cycle]] %>%
+    left_join(dfs$conditions[[cycle]], by = "SEQN") %>%
+    left_join(dfs$mental[[cycle]],     by = "SEQN") %>%
+    left_join(dfs$income[[cycle]],     by = "SEQN") %>%
+    mutate(cycle = cycle_labels[[cycle]])
+}
+
+cycle_data <- lapply(c("G", "H", "I", "J"), join_one_cycle)
+names(cycle_data) <- c("G", "H", "I", "J")
+
+
+clean_cycle <- function(df) {
+  df %>%
+    mutate(
+      cardio = if_else(
+        MCQ160B == "Yes" |
+        MCQ160C == "Yes" |
+        MCQ160D == "Yes" |
+        MCQ160E == "Yes" |
+        MCQ160B == "yes" |
+        MCQ160C == "yes" |
+        MCQ160D == "yes" |
+        MCQ160E == "yes",
+        1, 0
+      )
+    ) %>%
+    select(RIDRETH3, RIDAGEYR, RIAGENDR, INDFMPIR, DMDEDUC2,SDMVPSU,WTINT2YR,SDMVSTRA, cardio) %>%
+    na.omit() %>%
+    filter(RIDAGEYR >= 20) %>%
+    rename(
+      race = RIDRETH3,
+      age = RIDAGEYR,
+      gender = RIAGENDR,
+      income = INDFMPIR,
+      education =  DMDEDUC2
+    ) %>%
+    mutate(
+      race = case_when(
+        race %in% c("Mexican American", "Other Hispanic") ~ "Hispanic",
+        TRUE ~ as.character(race)
+      ),
+      education = case_when(
+        education %in% c(
+          "Less Than 9th Grade","Less than 9th grade",
+          "9-11th grade (Includes 12th grade with no diploma)"
+        ) ~ "Not High School Graduate",
+        education %in% c(
+          "High School Grad/GED or Equivalent","High school graduate/GED or equivalent",
+          "Some College or AA degree",  "Some college or AA degree" 
+        ) ~ "High School Graduate",
+        TRUE ~ as.character(education)
+      )
+    ) %>%
+    filter(!education %in% c("Don't Know","Refused",  "Don't know"  )) %>%
+    mutate(
+      cardio = as.factor(cardio),
+      education = relevel(as.factor(education), ref = "Not High School Graduate"),
+      gender = as.factor(gender),
+      race = relevel(as.factor(race), ref = "Non-Hispanic White")
+    )
+}
+cycle_G=clean_cycle(cycle_data$G)
+cycle_H=clean_cycle(cycle_data$H)
+cycle_I=clean_cycle(cycle_data$I)
+cycle_J=clean_cycle(cycle_data$J)
+cycle_G <- cycle_G %>%
+  mutate(cycle = "2011-2012")
+
+cycle_H <- cycle_H %>%
+  mutate(cycle = "2013-2014")
+
+cycle_I <- cycle_I %>%
+  mutate(cycle = "2015-2016")
+
+cycle_J <- cycle_J %>%
+  mutate(cycle = "2017-2018")
+df <- bind_rows(
+  cycle_G,
+  cycle_H,
+  cycle_I,
+  cycle_J
+)
+
+```
+
+```{r}
+library(survey)
+#Collapsed race for survey interaction models b/c survey-weighted interaction models with 5 race categories use too many parameters
+df <- df%>%
+mutate(race_collapsed = case_when(
+race=="Non-Hispanic White"~"Non-Hispanic White",
+TRUE~"Minority"
+))
+df$race_collapsed = relevel(as.factor(df$race_collapsed),
+
+ref = "Non-Hispanic White" )
+df_year2015=df %>% filter(cycle=='2015-2016')
+df_year2015$tranform_age=scale(df_year2015$age,center=TRUE,scale=FALSE)
+df_year2015$age_piece_1=pmax(0,df_year2015$tranform_age-median(tranform_age,na.rm=TRUE))
+df_year2015$age_piece_2=pmax(0,-1.5)
+df_year2015$age_group <- cut(
+  df_year2015$tranform_age,
+  breaks = c(-1.5, -.5, 0, .5, 1.5),
+  include.lowest = TRUE
+)
+nhc = svydesign(
+id =~SDMVPSU,
+strata = ~SDMVSTRA,
+weights = ~WTINT2YR,
+data = df_year2015,
+nest = TRUE
+)
+
+```
+
+```{r}
+
+model_base_svy = svyglm(cardio~education+ns(tranform_age,5)+gender+race+income,
+design = nhc,
+family = quasibinomial())
+model_base_svy2 = svyglm(cardio~education+tranform_age+age_piece_1+gender+race+income,
+design = nhc,
+family = quasibinomial())
+model_base_svy1 = svyglm(cardio~education+tranform_age+gender+race+income,
+design = nhc,
+family = quasibinomial())
+anova(model_base_svy1,model_base_svy)
+summary(model_base_svy)
+```
+
+```{r}
+model_base_svy <- svyglm(
+cardio ~ education + race +s(age)  + gender + income,
+design = nhc,
+family = quasibinomial()
+)
+summary(model_base_svy)
+
+```
+
+```{r}
+model_int_gender_svy <- svyglm(
+cardio ~ education * gender +bs(tranform_age,2)+ race+ income,
+design = nhc,
+family = quasibinomial()
+)
+summary(model_int_gender_svy)
+
+```
+
+
+
+
+```{r}
+library(svydiags)
+res = svystdres(model_int_race_svy, "SDMVSTRA","SDMVPSU", doplot = TRUE)
+h = svyhat(model_int_race_svy,doplot = TRUE)
+cd = svyCooksD(model_int_race_svy,"SDMVSTRA","SDMVPSU",doplot = TRUE)
+```
+
+```{r}
+library(svydiags)
+res = svystdres(model_base_svy, "SDMVSTRA","SDMVPSU", doplot = TRUE)
+h = svyhat(model_base_svy,doplot = TRUE)
+cd = svyCooksD(model_base_svy,"SDMVSTRA","SDMVPSU",doplot = TRUE)
+
+```
+
+```{r}
+model_int_gender_svy
+X = model.matrix(model_int_gender_svy)
+rows_used = as.numeric(model_int_gender_svy$y)
+w = weights(nhc)[rows_used]
+svyvif(model_int_gender_svy, X[,-1], w,"SDMVSTRA","SDMVPSU")
+summary(model_int_gender_svy)
+
+
+```
+
+
+```{r}
+library(svydiags)
+res = svystdres(model_base_svy1, "SDMVSTRA","SDMVPSU", doplot = TRUE)
+h = svyhat(model_base_svy1,doplot = TRUE)
+cd = svyCooksD(model_base_svy1,"SDMVSTRA","SDMVPSU",doplot = TRUE)
+```
+```{r}
+X = model.matrix(cardio~education+gender +tranform_age+ race+ income,
+data = df_year2015)
+y=df_year2015$cardio
+w=df_year2015$WTINT2Y
+ridge=cv.glmnet(X,y,family="binomial",alpha=0,weights = w,standardize=TRUE)
+coef(ridge,xvar="lambda")
+```
+```{r}
+model_base_svy1 = svyglm(cardio~education+s(age)+gender+race+income,
+design = nhc,
+family = quasibinomial())
+model_base_svy1_gen = svyglm(cardio~education*gender+s(age)+race+income,
+design = nhc,
+family = quasibinomial())
+
+model_base_svy= svyglm(cardio~education,
+design = nhc,
+family = quasibinomial())
+summary(model_base_svy1)
+```
+
+```{r}
+library(broom)
+library(dplyr)
+
+or_data <- tidy(model_base_svy, conf.int = TRUE) %>%
+  mutate(
+    OR = exp(estimate),
+    lower = exp(conf.low),
+    upper = exp(conf.high)
+  )
+or_data <- or_data %>%
+  filter(term != c("(Intercept)"))
+
+p1=ggplot(or_data, aes(x = OR, y = term)) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  scale_x_log10() +
+  labs(
+    x = "Odds Ratio",
+    y = "Predictor",
+    title = "Forest Plot of Odds Ratios Base Model"
+  ) +
+  theme_minimal()
+ggsave(
+  "forest_plots.png",
+  plot = p1,
+  width = 12,
+  height = 6.75,
+  dpi = 600
+)
+```
+
+```{r}
+model_base_svy= svyglm(cardio~education,
+design = nhc,
+family = quasibinomial())
+summary(model_base_svy)
+exp(coef(model_base_svy))
+```
+
+```{r}
+est <- coef(model_base_svy)
+
+se <- sqrt(diag(vcov(model_base_svy)))
+
+lower <- est - 1.96 * se
+upper <- est + 1.96 * se
+
+table <- data.frame(
+OR = exp(est),
+CI_lower = exp(lower),
+CI_upper = exp(upper)
+)
+
+round(table, 3)
+est <- coef(model_base_svy1_gen)
+
+se <- sqrt(diag(vcov(model_base_svy1_gen)))
+
+lower <- est - 1.96 * se
+upper <- est + 1.96 * se
+
+table <- data.frame(
+OR = exp(est),
+CI_lower = exp(lower),
+CI_upper = exp(upper)
+)
+
+round(table, 3)
+```
+
+
+
+```{r}
+p1=ggplot(df_year2015,aes(x=age,y=cardio))+geom_point()+geom_vline(xintercept = mean(df_year2015$age,na.rm=TRUE),linetype="dashed")+geom_hline(yintercept = mean(df_year2015$age,na.rm=TRUE),linetype="dashed")
+p2=ggplot(df_year2015,aes(x=age,y=cardio*age))+geom_point()+geom_vline(xintercept = mean(df_year2015$age,na.rm=TRUE),linetype="dashed")+geom_hline(yintercept = mean(df_year2015$age,na.rm=TRUE),linetype="dashed")
+p1
+p2
+```
