@@ -1,0 +1,7 @@
+model_base_svy <- svyglm(
+cardio ~ education + race +s(age)  + gender + income,
+design = nhc,
+family = quasibinomial()
+)
+summary(model_base_svy)
+
